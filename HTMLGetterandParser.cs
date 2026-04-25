@@ -1,4 +1,4 @@
-﻿// See https://aka.ms/new-console-template for more information
+// See https://aka.ms/new-console-template for more information
 
 using System;
 using System.Net.Http; //HttpClient
@@ -30,6 +30,7 @@ namespace MyApplication
   public class TreeNode
   {
     public string Tag { get; set; }
+	public string Text { get; set; }
 	public List<string> Classes { get; set; } = new List<string>();
 	public List<string> Rels { get; set; } = new List<string>();
 	public List<string> Autocompletes { get; set; } = new List<string>();
@@ -65,6 +66,7 @@ namespace MyApplication
 		Console.Write(lastChild ? "L" : "#");
 	  }
 	  Console.WriteLine(Tag + "(" + depth + ")");
+	  Console.WriteLine(Text);
 	  // foreach (KeyValuePair<string, string> atr in attributes)
 	  // {
 		// Console.WriteLine($"{atr.Key}=\"{atr.Value}\"");
@@ -115,6 +117,8 @@ namespace MyApplication
 		  Console.WriteLine($"Request error: {e.Message}");
 	    }
 	  }
+	  
+	  Console.WriteLine(html);
 	  
 	  //jika ingin diubah menjadi method parseHTML mulai di sini
 	  string temp = "";
@@ -222,6 +226,10 @@ namespace MyApplication
 		  
 		  if (TS == TagState.Exit && curNode!.Tag.Equals(nodeStack.Peek().Tag, StringComparison.OrdinalIgnoreCase)) {
 			nodeStack.Pop();
+			if (nodeStack.Count > 0)
+		    {
+			  nodeStack.Peek().Text += "<" + curNode.Tag + ">";
+		    }
 			if (curNode.Tag.Equals("script", StringComparison.OrdinalIgnoreCase)) {inScript = 0;}
 		  } else if (isDoctype == false && TS != TagState.Comment && inScript != 2) {
 			bool optional_closing = curNode!.Tag.Equals("body", StringComparison.OrdinalIgnoreCase) && nodeStack.Peek().Tag.Equals("head", StringComparison.OrdinalIgnoreCase);
@@ -244,6 +252,10 @@ namespace MyApplication
 			optional_closing = optional_closing || (descTag && nodeStack.Peek().Tag.Equals("colgroup", StringComparison.OrdinalIgnoreCase));
 			if (optional_closing == true) {
 			  nodeStack.Pop();
+			  if (nodeStack.Count > 0)
+		      {
+			    nodeStack.Peek().Text += "<" + curNode.Tag + ">";
+		      }
 			}
 		    if (curNode.Tag.Equals("html", StringComparison.OrdinalIgnoreCase)) {
 			  root = curNode;
@@ -253,20 +265,33 @@ namespace MyApplication
 		    }
 		    
 		    bool voidTag = voidTags.Contains(curNode.Tag);
-		    if (voidTag == false) nodeStack.Push(curNode);
+		    if (voidTag == false)
+			{
+			  nodeStack.Push(curNode);
+			} else if (nodeStack.Count > 0)
+			{
+			  nodeStack.Peek().Text += "<" + curNode.Tag + ">";
+			}
 		  }
 		  temp = string.Empty;
 		  curNode = null;
 		} else if (html[i] == '\"' && GS == GeneralState.Default) {
 	      GS = GeneralState.DQuote;
+		  if (nodeStack.Count > 0) nodeStack.Peek().Text += html[i];
 		} else if (html[i] == '\"' && GS == GeneralState.DQuote) {
 	      GS = GeneralState.Default;
+		  if (nodeStack.Count > 0) nodeStack.Peek().Text += html[i];
 		} else if (html[i] == '\'' && GS == GeneralState.Default) {
 	      GS = GeneralState.SQuote;
+		  if (nodeStack.Count > 0) nodeStack.Peek().Text += html[i];
 		} else if (html[i] == '\'' && GS == GeneralState.SQuote) {
 	      GS = GeneralState.Default;
+		  if (nodeStack.Count > 0) nodeStack.Peek().Text += html[i];
 		} else if (GS == GeneralState.Tag) {
 	      temp += html[i];
+		} else
+		{
+		  if (nodeStack.Count > 0) nodeStack.Peek().Text += html[i];
 		}
 	  }
 	  

@@ -128,6 +128,7 @@ namespace MyApplication
 	  int inScript = 0;
 	  
 	  for (int i = 0; i < html.Length; i++) {
+		if (html[i] == '\n' || html[i] == '\t' || html[i] == '\r') continue;
 		if (html[i] == '<' && GS == GeneralState.Default) {
 	      if (!(inScript == 2 && html[i + 1] != '/')) GS = GeneralState.Tag;
 		} else if (html[i] == '>' && GS == GeneralState.Tag) {

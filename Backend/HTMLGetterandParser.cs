@@ -3,343 +3,245 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace MyApplication
 {
-    enum GeneralState
-    {
-        Default,
-        Tag,
-        SQuote,
-        DQuote
-    }
-
-    enum TagState
-    {
-        Default,
-        Class,
-        Rel,
-        AutoC,
-        Atrb,
-        Exit,
-        Comment
-    }
+    // Mengembalikan tipe data yang dicari Program.cs
+    public enum ParseErrorType { None, UnexpectedClosingTag, UnmatchedClosingTag, MalformedAttribute, UnclosedTag, OrphanNode, EmptyTagName }
+    public record ParseError(ParseErrorType Type, string Detail, int CharPosition);
 
     public class TreeNode
     {
-        // ID unik per node, Parent, Depth
         private static int _counter = 0;
         public string NodeId { get; } = $"n{System.Threading.Interlocked.Increment(ref _counter)}";
         public TreeNode? Parent { get; set; }
         public int Depth { get; set; } = 0;
-
         public string Tag { get; set; }
+        public bool IsTextNode { get; set; } = false;
+        public string? TextContent { get; set; } = null;
         public List<string> Classes { get; set; } = new List<string>();
-        public List<string> Rels { get; set; } = new List<string>();
-        public List<string> Autocompletes { get; set; } = new List<string>();
-        private Dictionary<string, string> attributes = new Dictionary<string, string>();
-        public IReadOnlyDictionary<string, string> Attributes => attributes;
+        public Dictionary<string, string> Attributes { get; } = new Dictionary<string, string>();
         public List<TreeNode> Children { get; } = new List<TreeNode>();
-
-        // HtmlId shortcut untuk CSS selector id
-        public string? HtmlId => attributes.TryGetValue("id", out var v) ? v : null;
-        // =========================================================
+        public string? HtmlId => Attributes.TryGetValue("id", out var v) ? v : null;
 
         public TreeNode(string tag) => Tag = tag;
-
-        // AddChild yg auto set Parent dan Depth 
-        public void AddChild(TreeNode child)
-        {
-            child.Parent = this;
-            child.Depth = this.Depth + 1;
-            Children.Add(child);
+        public void AddChild(TreeNode child) { 
+            child.Parent = this; 
+            child.Depth = this.Depth + 1; 
+            Children.Add(child); 
         }
-
-        public void AddClass(string class_) => Classes.Add(class_);
-        public void AddRel(string rel_) => Rels.Add(rel_);
-        public void AddAutocomplete(string autocomplete_) => Autocompletes.Add(autocomplete_);
-
-        public void AddAttribute(string name, string val)
-        {
-            if (!attributes.ContainsKey(name))
-            {
-                attributes.Add(name, val);
-            }
-        }
-
-        public int MaxDepth()
-        {
-            if (Children.Count == 0) return Depth;
-            return Children.Max(c => c.MaxDepth());
-        }
-
-        public int SubtreeSize()
-        {
-            return 1 + Children.Sum(c => c.SubtreeSize());
-        }
-
-        static bool[] printTreeHelper = Enumerable.Repeat(false, 100).ToArray();
-        public void printTree(int depth, bool lastChild)
-        {
-            for (int i = 0; i < depth - 1; i++)
-            {
-                Console.Write(printTreeHelper[i] ? "|" : " ");
-            }
-            if (depth > 0)
-            {
-                Console.Write(lastChild ? "L" : "#");
-            }
-            Console.WriteLine(Tag + "(" + depth + ")");
-            if (Children.Count > 1)
-            {
-                printTreeHelper[depth] = true;
-            }
-            for (int i = 0; i < Children.Count; i++)
-            {
-                if (i == Children.Count - 1)
-                {
-                    printTreeHelper[depth] = false;
-                }
-                Children[i].printTree(depth + 1, i == Children.Count - 1);
-            }
-        }
+        public int MaxDepth() => Children.Count == 0 ? Depth : Children.Max(c => c.MaxDepth());
+        public int SubtreeSize() => 1 + Children.Sum(c => c.SubtreeSize());
     }
 
     public class HTMLGetterandParser
     {
-        static string[] voidTags = { "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
-        static string[] blockTags = { "address", "blockquote", "dd", "div", "dl", "dt", "canvas", "form", "Heading", "hr", "li", "main", "nav", "noscript", "ol", "pre", "section", "tfoot", "ul", "table", "p", "video", "aside", "article", "figcaption", "fieldset", "figure", "footer", "header" };
-        static string[] listTags = { "li", "ol", "ul" };
-        static string[] descTags = { "dt", "dd" };
-        static string[] optTags = { "option", "optgroup" };
-        static string[] tableTags = { "thead", "tbody", "tfoot", "tr", "th", "td", "colgroup" };
+        static readonly string[] voidTags = { "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
+        static readonly HttpClient client = new HttpClient() { Timeout = TimeSpan.FromSeconds(15) };
 
-        static readonly HttpClient client = new HttpClient();
-
-        // FetchHTML dipisah 
-        public static async Task<string?> FetchHTML(string url)
-        {
-            try
-            {
-                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "C# Application");
-                return await client.GetStringAsync(url);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Request error: {e.Message}");
-                return null;
-            }
+        public static async Task<string?> FetchHTML(string url) {
+            try { 
+                if (!client.DefaultRequestHeaders.Contains("User-Agent"))
+                    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0");
+                return await client.GetStringAsync(url); 
+            } catch { return null; }
         }
 
-        public static TreeNode? ParseHTML(string html)
+        // menerima parameter errors
+        public static TreeNode? ParseHTML(string html, List<ParseError>? errors = null)
         {
-            string temp = "";
+            errors ??= new List<ParseError>();
+
+            // Hapus konten script/style 
+            html = Regex.Replace(html, @"", "", RegexOptions.Singleline);
+            html = Regex.Replace(html, @"<(script|style)\b[^>]*>.*?</\1>", "<$1></$1>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+            string temp = "", textBuffer = "";
             TreeNode? root = null;
-            Stack<TreeNode> nodeStack = new Stack<TreeNode>();
-            GeneralState GS = GeneralState.Default;
-            int inScript = 0;
+            var stack = new Stack<TreeNode>();
+            bool inTag = false;
+            int tagStartPos = 0;
 
             for (int i = 0; i < html.Length; i++)
             {
-                if (html[i] == '<' && GS == GeneralState.Default)
-                {
-                    if (!(inScript == 2 && html[i + 1] != '/')) GS = GeneralState.Tag;
-                }
-                else if (html[i] == '>' && GS == GeneralState.Tag)
-                {
-                    GS = GeneralState.Default;
-                    bool firstArg = true;
-                    bool isDoctype = false;
-                    TagState TS = TagState.Default;
-                    string arg = string.Empty;
-                    TreeNode? curNode = null;
-                    bool inSQ = false;
-                    bool inDQ = false;
-
-                    string atrb = string.Empty;
-
-                    for (int j = 0; j < temp.Length; j++)
-                    {
-                        if (isDoctype == true) break;
-                        if (temp[0] == '/') TS = TagState.Exit;
-                        if (temp[0] == '!')
-                        {
-                            TS = TagState.Comment;
-                            break;
-                        }
-                        if (temp[j] == ' ' && firstArg == true)
-                        {
-                            if (arg.Equals("!doctype", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isDoctype = true;
-                            }
-                            else
-                            {
-                                if (arg.Equals("script", StringComparison.OrdinalIgnoreCase)) inScript = 1;
-                                firstArg = false;
-                                curNode = new TreeNode(arg.ToLower());
-                                arg = string.Empty;
-                            }
-                        }
-                        else if (TS == TagState.Default && temp[j] == '=')
-                        {
-                            if (arg.Equals("class", StringComparison.OrdinalIgnoreCase))
-                            {
-                                TS = TagState.Class;
-                            }
-                            else if (arg.Equals("rel", StringComparison.OrdinalIgnoreCase))
-                            {
-                                TS = TagState.Rel;
-                            }
-                            else if (arg.Equals("autocomplete", StringComparison.OrdinalIgnoreCase))
-                            {
-                                TS = TagState.AutoC;
-                            }
-                            else
-                            {
-                                TS = TagState.Atrb;
-                                atrb = arg;
-                            }
-                            arg = string.Empty;
-                        }
-                        else if (TS != TagState.Default && temp[j] == '\"' && inDQ == false && inSQ == false)
-                        {
-                            inDQ = true;
-                        }
-                        else if (TS != TagState.Default && temp[j] == '\'' && inDQ == false && inSQ == false)
-                        {
-                            inSQ = true;
-                        }
-                        else if (TS != TagState.Default && temp[j] == '\"' && inDQ == true && inSQ == false)
-                        {
-                            inDQ = false;
-                            switch (TS)
-                            {
-                                case TagState.Class:
-                                    curNode!.Classes = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.Rel:
-                                    curNode!.Rels = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.AutoC:
-                                    curNode!.Autocompletes = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.Atrb:
-                                    curNode!.AddAttribute(atrb, arg);
-                                    break;
-                            }
-                            TS = TagState.Default;
-                            arg = string.Empty;
-                            atrb = string.Empty;
-                        }
-                        else if (TS != TagState.Default && temp[j] == '\'' && inDQ == false && inSQ == true)
-                        {
-                            inSQ = false;
-                            switch (TS)
-                            {
-                                case TagState.Class:
-                                    curNode!.Classes = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.Rel:
-                                    curNode!.Rels = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.AutoC:
-                                    curNode!.Autocompletes = new List<string>(arg.Split(' '));
-                                    break;
-                                case TagState.Atrb:
-                                    curNode!.AddAttribute(atrb, arg);
-                                    break;
-                            }
-                            TS = TagState.Default;
-                            arg = string.Empty;
-                            atrb = string.Empty;
-                        }
-                        else if ((TS != TagState.Default && TS != TagState.Exit) || (TS == TagState.Default && temp[j] != ' ') || (TS == TagState.Exit && temp[j] != '/'))
-                        {
-                            arg += temp[j];
-                        }
-                        if ((TS == TagState.Default || TS == TagState.Exit) && j == temp.Length - 1 && firstArg == true)
-                        {
-                            firstArg = false;
-                            curNode = new TreeNode(arg.ToLower());
-                            if (arg.Equals("script", StringComparison.OrdinalIgnoreCase)) inScript = 1;
-                            arg = string.Empty;
-                        }
+                char c = html[i];
+                if (c == '<') {
+                    if (!string.IsNullOrWhiteSpace(textBuffer) && stack.Count > 0) {
+                        var p = EnsureBody(stack, "#text");
+                        p.AddChild(new TreeNode("#text") { IsTextNode = true, TextContent = textBuffer.Trim() });
                     }
-
-                    if (TS == TagState.Exit && nodeStack.Count > 0 && curNode!.Tag.Equals(nodeStack.Peek().Tag, StringComparison.OrdinalIgnoreCase))
-                    {
-                        nodeStack.Pop();
-                        if (curNode.Tag.Equals("script", StringComparison.OrdinalIgnoreCase)) { inScript = 0; }
-                    }
-                    else if (isDoctype == false && TS != TagState.Comment && inScript != 2)
-                    {
-                        bool optional_closing = nodeStack.Count > 0 && curNode!.Tag.Equals("body", StringComparison.OrdinalIgnoreCase) && nodeStack.Peek().Tag.Equals("head", StringComparison.OrdinalIgnoreCase);
-                        bool blockTag = blockTags.Contains(curNode!.Tag);
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && blockTag && nodeStack.Peek().Tag.Equals("p", StringComparison.OrdinalIgnoreCase));
-                        bool listTag = listTags.Contains(curNode.Tag);
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && listTag && nodeStack.Peek().Tag.Equals("li", StringComparison.OrdinalIgnoreCase));
-                        bool descTag = descTags.Contains(curNode.Tag);
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && descTag && nodeStack.Peek().Tag.Equals("dt", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && descTag && nodeStack.Peek().Tag.Equals("dd", StringComparison.OrdinalIgnoreCase));
-                        bool optTag = optTags.Contains(curNode.Tag);
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && optTag && nodeStack.Peek().Tag.Equals("option", StringComparison.OrdinalIgnoreCase));
-                        bool tableTag = tableTags.Contains(curNode.Tag);
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("thead", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("tbody", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("tfoot", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("tr", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("th", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("td", StringComparison.OrdinalIgnoreCase));
-                        optional_closing = optional_closing || (nodeStack.Count > 0 && tableTag && nodeStack.Peek().Tag.Equals("colgroup", StringComparison.OrdinalIgnoreCase));
-                        if (optional_closing == true)
-                        {
-                            nodeStack.Pop();
-                        }
-                        if (curNode.Tag.Equals("html", StringComparison.OrdinalIgnoreCase))
-                        {
-                            root = curNode;
-                            nodeStack.Push(curNode); // push html ke stack
-                        }
-                        else if (nodeStack.Count > 0)
-                        {
-                            // auto-set Parent & Depth 
-                            nodeStack.Peek().AddChild(curNode);
-                            if (inScript == 1) inScript = 2;
-                        }
-
-                        bool voidTag = voidTags.Contains(curNode.Tag);
-                        if (voidTag == false) nodeStack.Push(curNode);
-                    }
-                    temp = string.Empty;
-                    curNode = null;
+                    textBuffer = ""; inTag = true; tagStartPos = i;
                 }
-                else if (html[i] == '\"' && GS == GeneralState.Default)
-                {
-                    GS = GeneralState.DQuote;
+                else if (c == '>' && inTag) {
+                    inTag = false;
+                    ProcessTag(temp, ref root, stack, errors, tagStartPos);
+                    temp = "";
                 }
-                else if (html[i] == '\"' && GS == GeneralState.DQuote)
-                {
-                    GS = GeneralState.Default;
-                }
-                else if (html[i] == '\'' && GS == GeneralState.Default)
-                {
-                    GS = GeneralState.SQuote;
-                }
-                else if (html[i] == '\'' && GS == GeneralState.SQuote)
-                {
-                    GS = GeneralState.Default;
-                }
-                else if (GS == GeneralState.Tag)
-                {
-                    temp += html[i];
-                }
+                else if (inTag) temp += c;
+                else textBuffer += c;
             }
 
-            if (nodeStack.Count > 0 && nodeStack.Peek().Tag.Equals("body", StringComparison.OrdinalIgnoreCase)) nodeStack.Pop();
-            if (nodeStack.Count > 0 && nodeStack.Peek().Tag.Equals("html", StringComparison.OrdinalIgnoreCase)) nodeStack.Pop();
+            // Error: tag yang tidak ditutup di akhir dokumen
+            // (lewati html/head/body karena sering implicitly ditutup)
+            var skipImplicit = new HashSet<string> { "html", "head", "body" };
+            while (stack.Count > 0) {
+                var unclosed = stack.Pop();
+                if (!skipImplicit.Contains(unclosed.Tag) && !unclosed.IsTextNode)
+                    errors.Add(new ParseError(ParseErrorType.UnclosedTag,
+                        $"Tag '<{unclosed.Tag}>' tidak ditutup sampai akhir dokumen", html.Length - 1));
+            }
 
             return root;
+        }
+
+        private static TreeNode EnsureBody(Stack<TreeNode> stack, string tag) {
+            var curr = stack.Peek();
+            if (curr.Tag == "html" && tag != "body" && tag != "head") {
+                var body = curr.Children.FirstOrDefault(c => c.Tag == "body") ?? new TreeNode("body");
+                if (body.Parent == null) curr.AddChild(body);
+                if (!stack.Contains(body)) stack.Push(body);
+                return body;
+            }
+            return curr;
+        }
+
+        private static void ProcessTag(string raw, ref TreeNode? root, Stack<TreeNode> stack, List<ParseError> errors, int charPos) {
+            raw = raw.Trim();
+            if (string.IsNullOrEmpty(raw)) return;
+
+            bool isExit = raw.StartsWith("/");
+            string content = isExit ? raw.Substring(1).Trim() : raw;
+            bool selfClose = content.EndsWith("/");
+            if (selfClose) content = content.Substring(0, content.Length - 1).TrimEnd();
+
+            // Ambil tag name
+            int spaceIdx = -1;
+            for (int k = 0; k < content.Length; k++) {
+                if (content[k] == ' ' || content[k] == '\t' || content[k] == '\n' || content[k] == '\r') {
+                    spaceIdx = k; break;
+                }
+            }
+            string tagName = (spaceIdx < 0 ? content : content.Substring(0, spaceIdx)).ToLower().Trim();
+            string attrStr = spaceIdx < 0 ? "" : content.Substring(spaceIdx + 1).Trim();
+
+            // Error: tag name kosong
+            if (string.IsNullOrEmpty(tagName)) {
+                errors.Add(new ParseError(ParseErrorType.EmptyTagName, $"Tag dengan nama kosong ditemukan", charPos));
+                return;
+            }
+
+            // Error: tag name mengandung karakter tidak valid
+            if (!Regex.IsMatch(tagName, @"^[a-z][a-z0-9-]*$") && tagName != "!doctype" && !tagName.StartsWith("!")) {
+                errors.Add(new ParseError(ParseErrorType.EmptyTagName, $"Nama tag tidak valid: '{tagName}'", charPos));
+                // tetap lanjutkan parsing jika masih bisa
+            }
+
+            // Abaikan doctype dan komentar
+            if (tagName.StartsWith("!")) return;
+
+            if (isExit) {
+                // Error: unmatched closing tag (stack kosong)
+                if (stack.Count == 0) {
+                    errors.Add(new ParseError(ParseErrorType.UnmatchedClosingTag,
+                        $"Closing tag '</{tagName}>' tanpa opening tag yang sesuai", charPos));
+                    return;
+                }
+                // Error: unexpected closing tag
+                if (stack.Peek().Tag != tagName) {
+                    // Coba cari di stack  pasangannya
+                    bool foundInStack = stack.Any(n => n.Tag == tagName);
+                    if (foundInStack) {
+                        // Pop sampai ketemu tag yang cocok, catat semua yang diskip sebagai UnclosedTag
+                        while (stack.Count > 0 && stack.Peek().Tag != tagName) {
+                            var skipped = stack.Pop();
+                            if (!skipped.IsTextNode)
+                                errors.Add(new ParseError(ParseErrorType.UnclosedTag,
+                                    $"Tag '<{skipped.Tag}>' tidak ditutup (implicitly ditutup oleh '</{tagName}>')", charPos));
+                        }
+                        errors.Add(new ParseError(ParseErrorType.UnexpectedClosingTag,
+                            $"Tag '</{tagName}>' menutup sebelum tag di dalamnya ditutup", charPos));
+                        if (stack.Count > 0) stack.Pop();
+                    } else {
+                        errors.Add(new ParseError(ParseErrorType.UnmatchedClosingTag,
+                            $"Closing tag '</{tagName}>' tanpa opening tag yang sesuai", charPos));
+                    }
+                    return;
+                }
+                stack.Pop();
+                return;
+            }
+
+            var node = new TreeNode(tagName);
+
+            // Parse atribut yg handle quoted values dengan spasi
+            if (!string.IsNullOrEmpty(attrStr)) {
+                ParseAttributes(attrStr, node, errors, charPos);
+            }
+
+            if (root == null && tagName == "html") { root = node; stack.Push(node); return; }
+            if (stack.Count > 0) {
+                var parent = EnsureBody(stack, tagName);
+                parent.AddChild(node);
+            } else {
+                // Node orphan (ada node di luar root)
+                errors.Add(new ParseError(ParseErrorType.OrphanNode,
+                    $"Tag '<{tagName}>' muncul di luar struktur root", charPos));
+            }
+
+            if (!voidTags.Contains(tagName) && !selfClose) stack.Push(node);
+        }
+
+        // Parse atribut 
+        private static void ParseAttributes(string attrStr, TreeNode node, List<ParseError> errors, int charPos) {
+            int i = 0;
+            while (i < attrStr.Length) {
+                // Skip whitespace
+                while (i < attrStr.Length && char.IsWhiteSpace(attrStr[i])) i++;
+                if (i >= attrStr.Length) break;
+
+                // Baca nama atribut
+                int nameStart = i;
+                while (i < attrStr.Length && attrStr[i] != '=' && !char.IsWhiteSpace(attrStr[i])) i++;
+                string attrName = attrStr.Substring(nameStart, i - nameStart).ToLower().Trim();
+
+                if (string.IsNullOrEmpty(attrName)) { i++; continue; }
+
+                // Skip whitespace setelah nama
+                while (i < attrStr.Length && char.IsWhiteSpace(attrStr[i])) i++;
+
+                string attrValue = "";
+                if (i < attrStr.Length && attrStr[i] == '=') {
+                    i++; // lewati '='
+                    while (i < attrStr.Length && char.IsWhiteSpace(attrStr[i])) i++;
+
+                    if (i < attrStr.Length && (attrStr[i] == '"' || attrStr[i] == '\'')) {
+                        // Quoted value ambil semua isi termasuk spasi
+                        char quote = attrStr[i];
+                        i++;
+                        int valStart = i;
+                        while (i < attrStr.Length && attrStr[i] != quote) i++;
+                        attrValue = attrStr.Substring(valStart, i - valStart);
+                        if (i < attrStr.Length) i++; // lewati closing quote
+                        else errors.Add(new ParseError(ParseErrorType.MalformedAttribute,
+                            $"Atribut '{attrName}' tidak memiliki closing quote", charPos));
+                    } else {
+                        // Unquoted value
+                        int valStart = i;
+                        while (i < attrStr.Length && !char.IsWhiteSpace(attrStr[i])) i++;
+                        attrValue = attrStr.Substring(valStart, i - valStart);
+                    }
+                }
+                // boolean attribute (tanpa value) attrValue tetap ""
+
+                if (attrName == "class") {
+                    // Split class value berdasarkan whitespace
+                    var classes = attrValue.Split(new[] {' ', '\t', '\n', '\r'}, StringSplitOptions.RemoveEmptyEntries);
+                    node.Classes.AddRange(classes);
+                } else {
+                    node.Attributes[attrName] = attrValue;
+                }
+            }
         }
     }
 }

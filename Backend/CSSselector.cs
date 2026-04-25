@@ -4,8 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace MyApplication {
 
-    public class CssSelector
-    {
+    public class CssSelector {
         private record SimpleSelector(
             string? Tag,
             List<string> Classes,
@@ -21,39 +20,34 @@ namespace MyApplication {
         private readonly List<SelectorPart> _parts;
         public string Raw { get; }
 
-        public CssSelector(string selector)
-        {
+        public CssSelector(string selector) {
             Raw = selector.Trim();
             _parts = Parse(Raw);
         }
 
         // Public API 
 
-        public bool Matches(TreeNode node)
-        {
+        public bool Matches(TreeNode node) {
             if (_parts.Count == 0) return false;
             return MatchFromRight(node, _parts.Count - 1);
         }
 
         // Matching
 
-        private bool MatchFromRight(TreeNode node, int partIndex)
-        {
+        private bool MatchFromRight(TreeNode node, int partIndex) {
             var part = _parts[partIndex];
             if (!MatchSimple(node, part.Simple)) return false;
             if (partIndex == 0) return true;
 
             string combinator = _parts[partIndex].Combinator;
-            switch (combinator)
-            {
+            switch (combinator) {
                 case ">":
                     if (node.Parent == null) return false;
                     return MatchFromRight(node.Parent, partIndex - 1);
 
                 case " ":
                     TreeNode? ancestor = node.Parent;
-                    while (ancestor != null)
-                    {
+                    while (ancestor != null) {
                         if (MatchFromRight(ancestor, partIndex - 1)) return true;
                         ancestor = ancestor.Parent;
                     }
@@ -79,8 +73,7 @@ namespace MyApplication {
             }
         }
 
-        private static bool MatchSimple(TreeNode node, SimpleSelector s)
-        {
+        private static bool MatchSimple(TreeNode node, SimpleSelector s) {
             if (!s.IsUniversal && s.Tag != null &&
                 !node.Tag.Equals(s.Tag, StringComparison.OrdinalIgnoreCase))
                 return false;
@@ -89,15 +82,13 @@ namespace MyApplication {
                 if (!node.Classes.Contains(cls, StringComparer.OrdinalIgnoreCase))
                     return false;
 
-            if (s.Id != null)
-            {
+            if (s.Id != null) {
                 var nodeId = node.HtmlId;
                 if (nodeId == null || !nodeId.Equals(s.Id, StringComparison.OrdinalIgnoreCase))
                     return false;
             }
 
-            foreach (var attr in s.Attrs)
-            {
+            foreach (var attr in s.Attrs) {
                 if (!node.Attributes.TryGetValue(attr.Name, out var attrVal))
                     return false;
                 if (!MatchAttrOp(attrVal, attr.Op, attr.Value))
@@ -107,10 +98,8 @@ namespace MyApplication {
             return true;
         }
 
-        private static bool MatchAttrOp(string attrVal, string op, string expected)
-        {
-            return op switch
-            {
+        private static bool MatchAttrOp(string attrVal, string op, string expected) {
+            return op switch {
                 ""   => true,
                 "="  => attrVal == expected,
                 "~=" => Array.Exists(attrVal.Split(' '), x => x == expected),
@@ -124,34 +113,28 @@ namespace MyApplication {
 
         // Parser 
 
-        private static List<SelectorPart> Parse(string selector)
-        {
+        private static List<SelectorPart> Parse(string selector) {
             var parts = new List<SelectorPart>();
             string combinator = " ";
             int i = 0;
 
-            while (i < selector.Length)
-            {
-                if (selector[i] == ' ')
-                {
+            while (i < selector.Length) {
+                if (selector[i] == ' ') {
                     int j = i;
                     while (j < selector.Length && selector[j] == ' ') j++;
-                    if (j < selector.Length && (selector[j] == '>' || selector[j] == '+' || selector[j] == '~'))
-                    {
+                    if (j < selector.Length && (selector[j] == '>' || selector[j] == '+' || selector[j] == '~')) {
                         combinator = selector[j].ToString();
                         i = j + 1;
                         while (i < selector.Length && selector[i] == ' ') i++;
                     }
-                    else
-                    {
+                    else {
                         combinator = " ";
                         i = j;
                     }
                     continue;
                 }
 
-                if (selector[i] == '>' || selector[i] == '+' || selector[i] == '~')
-                {
+                if (selector[i] == '>' || selector[i] == '+' || selector[i] == '~') {
                     combinator = selector[i].ToString();
                     i++;
                     while (i < selector.Length && selector[i] == ' ') i++;
@@ -167,8 +150,7 @@ namespace MyApplication {
             return parts;
         }
 
-        private static (SimpleSelector, int) ParseSimple(string s, int start)
-        {
+        private static (SimpleSelector, int) ParseSimple(string s, int start) {
             string? tag = null;
             bool isUniversal = false;
             var classes = new List<string>();
@@ -178,28 +160,23 @@ namespace MyApplication {
             int i = start;
             int consumed = 0;
 
-            while (i < s.Length)
-            {
+            while (i < s.Length) {
                 char c = s[i];
 
-                if (c == '*')
-                {
+                if (c == '*') {
                     isUniversal = true;
                     i++; consumed++;
                 }
-                else if (c == '.')
-                {
+                else if (c == '.') {
                     i++; consumed++;
                     string cls = ReadIdent(s, ref i, ref consumed);
                     classes.Add(cls);
                 }
-                else if (c == '#')
-                {
+                else if (c == '#') {
                     i++; consumed++;
                     id = ReadIdent(s, ref i, ref consumed);
                 }
-                else if (c == '[')
-                {
+                else if (c == '[') {
                     i++; consumed++;
                     int end = s.IndexOf(']', i);
                     if (end < 0) break;
@@ -208,12 +185,10 @@ namespace MyApplication {
                     i = end + 1;
                     attrs.Add(ParseAttrSelector(attrStr));
                 }
-                else if (c == ' ' || c == '>' || c == '+' || c == '~')
-                {
+                else if (c == ' ' || c == '>' || c == '+' || c == '~') {
                     break;
                 }
-                else
-                {
+                else {
                     tag = ReadIdent(s, ref i, ref consumed).ToLower();
                 }
             }
@@ -224,20 +199,17 @@ namespace MyApplication {
             return (new SimpleSelector(tag, classes, id, attrs, isUniversal), consumed);
         }
 
-        private static string ReadIdent(string s, ref int i, ref int consumed)
-        {
+        private static string ReadIdent(string s, ref int i, ref int consumed) {
             int start = i;
             while (i < s.Length && s[i] != '.' && s[i] != '#' && s[i] != '[' &&
                    s[i] != ' ' && s[i] != '>' && s[i] != '+' && s[i] != '~' &&
-                   s[i] != ']' && s[i] != ':')
-            {
+                   s[i] != ']' && s[i] != ':') {
                 i++; consumed++;
             }
             return s.Substring(start, i - start);
         }
 
-        private static AttrSelector ParseAttrSelector(string s)
-        {
+        private static AttrSelector ParseAttrSelector(string s) {
             var match = Regex.Match(s.Trim(), @"^([\w-]+)(?:(~=|\^=|\$=|\*=|\|=|=)([""']?)(.+?)\3)?$");
             if (!match.Success) return new AttrSelector(s.Trim(), "", "");
             return new AttrSelector(
